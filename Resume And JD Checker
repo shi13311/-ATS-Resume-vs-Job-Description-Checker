@@ -1,0 +1,215 @@
+import streamlit as st
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import PyPDF2
+import docx
+import matplotlib.pyplot as plt
+import pytesseract
+from PIL import Image
+
+# ---------------------------------------
+# PAGE CONFIG
+# ---------------------------------------
+st.set_page_config(page_title="ATS Resume Checker", layout="wide")
+
+st.markdown("""
+    <h1 style='text-align:center;color:#4A90E2;'>📄 ATS Resume vs Job Description Checker</h1>
+""", unsafe_allow_html=True)
+
+
+# ---------------------------------------
+# FILE READERS
+# ---------------------------------------
+def read_pdf(file):
+    reader = PyPDF2.PdfReader(file)
+    text = ""
+    for page in reader.pages:
+        extracted = page.extract_text()
+        if extracted:
+            text += extracted
+    return text
+
+
+def read_docx(file):
+    doc = docx.Document(file)
+    return "\n".join([para.text for para in doc.paragraphs])
+
+
+def read_image_ocr(file):
+    img = Image.open(file)
+    return pytesseract.image_to_string(img)
+
+
+def extract_text(uploaded_file):
+    if uploaded_file.type == "application/pdf":
+        return read_pdf(uploaded_file)
+
+    elif uploaded_file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        return read_docx(uploaded_file)
+
+    elif uploaded_file.type.startswith("image"):
+        return read_image_ocr(uploaded_file)
+
+    return ""
+
+
+# ---------------------------------------
+# SKILL EXTRACTOR
+# ---------------------------------------
+def extract_skills(text):
+    skill_list = [
+        "python",
+        "sql",
+        "excel",
+        "power bi",
+        "tableau",
+        "machine learning",
+        "deep learning",
+        "nlp",
+        "html",
+        "css",
+        "javascript",
+        "react",
+        "communication",
+        "teamwork",
+        "leadership",
+        "data analysis",
+        "data visualization",
+        "statistics"
+    ]
+
+    found = []
+
+    text = text.lower()
+
+    for skill in skill_list:
+        if skill.lower() in text:
+            found.append(skill)
+
+    return sorted(list(set(found)))
+
+
+# ---------------------------------------
+# VISUAL PLOT FUNCTION
+# ---------------------------------------
+def plot_score(similarity_score, skill_match_score, final_score):
+    fig, ax = plt.subplots(figsize=(6, 4))
+
+    categories = ["Similarity", "Skill Match", "Final ATS"]
+    values = [similarity_score, skill_match_score, final_score]
+
+    ax.bar(categories, values)
+    ax.set_ylim(0, 100)
+    ax.set_ylabel("Score (%)")
+    ax.set_title("ATS Score Breakdown")
+
+    st.pyplot(fig)
+
+
+# ---------------------------------------
+# INPUT SECTION
+# ---------------------------------------
+col1, col2 = st.columns(2)
+
+with col1:
+    resume_file = st.file_uploader(
+        "Upload Resume (PDF / DOCX / Image)",
+        type=["pdf", "docx", "png", "jpg", "jpeg"]
+    )
+
+with col2:
+    jd_text = st.text_area(
+        "Paste Job Description Here",
+        height=250
+    )
+
+
+# ---------------------------------------
+# PROCESSING
+# ---------------------------------------
+if st.button("Analyze ATS Score"):
+
+    if resume_file is None or not jd_text.strip():
+        st.error("Please upload resume and enter job description!")
+
+    else:
+
+        resume_text = extract_text(resume_file)
+
+        vectorizer = TfidfVectorizer()
+
+        vectors = vectorizer.fit_transform([resume_text, jd_text])
+
+        similarity = round(
+            cosine_similarity(vectors[0], vectors[1])[0][0] * 100,
+            2
+        )
+
+        jd_skills = extract_skills(jd_text)
+        resume_skills = extract_skills(resume_text)
+
+        matched = list(set(jd_skills) & set(resume_skills))
+        missing = list(set(jd_skills) - set(resume_skills))
+
+        skill_match_score = round(
+            (len(matched) / max(1, len(jd_skills))) * 100,
+            2
+        )
+
+        final_score = round(
+            (0.7 * similarity) + (0.3 * skill_match_score),
+            2
+        )
+
+        # ---------------------------------------
+        # OUTPUT
+        # ---------------------------------------
+
+        c1, c2 = st.columns(2)
+
+        with c1:
+            st.subheader("🟦 Skill Analysis")
+
+            st.write("### JD Skills")
+            st.write(jd_skills)
+
+            st.write("### Resume Skills")
+            st.write(resume_skills)
+
+            st.write("### ✅ Matched Skills")
+            st.success(", ".join(matched) if matched else "No matched skills")
+
+            st.write("### ❌ Missing Skills")
+            st.warning(", ".join(missing) if missing else "No missing skills")
+
+        with c2:
+
+            st.metric("TF-IDF Similarity", f"{similarity}%")
+            st.metric("Skill Match", f"{skill_match_score}%")
+            st.metric("Final ATS Score", f"{final_score}%")
+
+            if final_score >= 80:
+                st.success("Excellent Resume ✅")
+            elif final_score >= 60:
+                st.info("Good Resume 👍")
+            elif final_score >= 40:
+                st.warning("Average Resume ⚠️")
+            else:
+                st.error("Needs Improvement ❌")
+
+        st.markdown("---")
+
+        st.subheader("📊 Score Visualization")
+
+        plot_score(similarity, skill_match_score, final_score)
+
+        st.markdown("---")
+
+        st.subheader("💡 Suggestions")
+
+        if missing:
+            st.write("Try adding these skills to your resume:")
+            for skill in missing:
+                st.write(f"- {skill}")
+        else:
+            st.success("Great! Your resume already contains all required skills.")
